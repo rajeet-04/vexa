@@ -19,8 +19,6 @@ services:
 
   postgres:
     image: postgres:17-alpine
-    # idle_in_transaction_session_timeout=60s auto-kills orphaned transactions
-    # (defense-in-depth against future DB session leaks in meeting-api).
     command: ["postgres", "-c", "idle_in_transaction_session_timeout=60000"]
     environment:
       - POSTGRES_DB=${DB_NAME:-vexa}
@@ -47,15 +45,6 @@ services:
       - MINIO_ROOT_USER=${MINIO_ACCESS_KEY:-vexa-access-key}
       - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY:-vexa-secret-key}
     ports:
-      # v0.10.5.3 Pack D-3 follow-up (Option B):
-      # MINIO_HOST_BIND defaults to 127.0.0.1 (safe — only the host can reach
-      # MinIO; presigned URLs only work for browsers running on the host).
-      # For external-browser audio playback (e.g. dashboard accessed from a
-      # remote machine), set MINIO_HOST_BIND=0.0.0.0 + set MINIO_PUBLIC_ENDPOINT
-      # to e.g. http://<host-public-ip>:${MINIO_HOST_PORT}. The presigned URL
-      # signature uses MINIO_PUBLIC_ENDPOINT; without that env, presigned URLs
-      # carry the in-network hostname `minio:9000` which only resolves inside
-      # the docker bridge network.
       - "${MINIO_HOST_BIND:-127.0.0.1}:${MINIO_HOST_PORT:-9000}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     volumes:
@@ -82,29 +71,63 @@ services:
     networks:
       - vexa
 
-  # --- Transcription (local CPU Whisper — no data leaves your machine) ---
+  # --- GPU Transcription (RTX 5050 CUDA — local, no data leaves your machine) ---
 
-  transcription-service:
+  transcription-worker:
     build:
       context: ../../services/transcription-service
-      dockerfile: Dockerfile.cpu
-    image: transcription-service-cpu:local
-    container_name: transcription-service
-    env_file:
-      - ../../services/transcription-service/.env
+      dockerfile: Dockerfile
+    image: transcription-service-gpu:local
+    container_name: transcription-worker-1
+    environment:
+      - WORKER_ID=1
+      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - DEVICE=cuda
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - VAD_MIN_SILENCE_DURATION_MS=80
+      - API_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-vexa-local-gpu-token}
+      - FAIL_FAST_WHEN_BUSY=true
+      - MAX_CONCURRENT_TRANSCRIPTIONS=10
     volumes:
       - ../../services/transcription-service/models:/app/models
-    ports:
-      - "127.0.0.1:8083:8000"
-    networks:
-      - vexa
-    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 120s
+    networks:
+      - vexa
+    restart: unless-stopped
+
+  transcription-lb:
+    image: nginx:alpine
+    container_name: transcription-lb
+    volumes:
+      - ./nginx-transcription.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      transcription-worker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 130s
+    ports:
+      - "127.0.0.1:8083:80"
+    networks:
+      vexa:
+        aliases:
+          - transcription-service
+    restart: unless-stopped
 
   # --- Core services ---
 
@@ -145,7 +168,7 @@ services:
       dockerfile: Dockerfile
     image: vexaai/runtime-api:${IMAGE_TAG}
     group_add:
-      - "${DOCKER_GID:-998}"
+      - "${DOCKER_GID:-0}"
     ports:
       - "127.0.0.1:${RUNTIME_API_PORT:-8090}:8090"
     environment:
@@ -153,8 +176,8 @@ services:
       - AGENT_IMAGE=${AGENT_IMAGE}
       - BROWSER_IMAGE=${BROWSER_IMAGE}
       - REDIS_URL=redis://redis:6379
-      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
-      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - TRANSCRIPTION_SERVICE_URL=http://transcription-lb:80/v1/audio/transcriptions
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-vexa-local-gpu-token}
       - TTS_SERVICE_URL=http://tts-service:8002
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
@@ -181,51 +204,10 @@ services:
     depends_on:
       - redis
       - postgres
-      - transcription-service
+      - transcription-lb
     networks:
       - vexa
     restart: unless-stopped
-
-  # agent-api: NO-SHIP for 0.10 — not included in release
-  # agent-api:
-  #   build:
-  #     context: ../..
-  #     dockerfile: services/agent-api/Dockerfile
-  #   image: vexaai/agent-api:${IMAGE_TAG}
-  #   ports:
-  #     - "${AGENT_API_PORT:-8100}:8100"
-  #   environment:
-  #     - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
-  #     - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent:${IMAGE_TAG}}
-  #     - STORAGE_BACKEND=s3
-  #     - S3_ENDPOINT=http://minio:9000
-  #     - S3_ACCESS_KEY=${MINIO_ACCESS_KEY:-vexa-access-key}
-  #     - S3_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
-  #     - S3_BUCKET=${MINIO_BUCKET:-vexa}
-  #     - CLAUDE_CREDENTIALS_PATH=${CLAUDE_CREDENTIALS_PATH}
-  #     - CLAUDE_JSON_PATH=${CLAUDE_JSON_PATH}
-  #     - IDLE_TIMEOUT=${IDLE_TIMEOUT:-300}
-  #     - REDIS_URL=redis://redis:6379
-  #     - RUNTIME_API_URL=http://runtime-api:8090
-  #     - ADMIN_API_URL=http://admin-api:8001
-  #     - ADMIN_API_TOKEN=${ADMIN_TOKEN:-vexa-admin-token}
-  #     - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
-  #     - AGENT_API_INTERNAL_URL=http://agent-api:8100
-  #     - API_KEY=${BOT_API_TOKEN:-}
-  #     - BOT_API_TOKEN=${BOT_API_TOKEN:-}
-  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #   depends_on:
-  #     minio-init:
-  #       condition: service_completed_successfully
-  #     redis:
-  #       condition: service_started
-  #     runtime-api:
-  #       condition: service_started
-  #   networks:
-  #     - vexa
-  #   restart: unless-stopped
 
   api-gateway:
     build:
@@ -291,9 +273,6 @@ services:
       - BOT_IMAGE_NAME=${BROWSER_IMAGE}
       - DOCKER_NETWORK=${COMPOSE_PROJECT_NAME:-vexa}_vexa
       - TTS_SERVICE_URL=http://tts-service:8002
-      # agent-api is not shipped in this compose profile. Operators can opt in
-      # with POST_MEETING_HOOKS, but the default must not point at a disabled
-      # service or every completed meeting emits DNS errors before handoff.
       - POST_MEETING_HOOKS=${POST_MEETING_HOOKS:-}
       - TRANSCRIPTION_COLLECTOR_URL=http://meeting-api:8080
       - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
@@ -302,18 +281,11 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-vexa-secret-key}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
-      # v0.10.5.3 Pack D-3 follow-up (Option B): browser-reachable MinIO
-      # endpoint for presigned download URLs. Default falls back to the
-      # internal hostname which works for in-network browsers (compose VM
-      # reachable on its own LAN). For external browser access set this
-      # to e.g. http://${HOST_PUBLIC_IP}:9000 in .env. storage.py uses
-      # this only when signing URLs; server-side I/O still uses
-      # MINIO_ENDPOINT for fast in-cluster reads.
       - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
-      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
-      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
+      - TRANSCRIPTION_SERVICE_URL=http://transcription-lb:80/v1/audio/transcriptions
+      - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-vexa-local-gpu-token}
       - TRANSCRIPTION_GATEWAY_URL=${TRANSCRIPTION_GATEWAY_URL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -324,33 +296,12 @@ services:
       - redis
       - postgres
       - runtime-api
-      - transcription-service
+      - transcription-lb
     networks:
       - vexa
     restart: unless-stopped
 
   # --- Optional services ---
-
-  # telegram-bot: NO-SHIP for 0.10 — not included in release
-  # telegram-bot:
-  #   build:
-  #     context: ../..
-  #     dockerfile: services/telegram-bot/Dockerfile
-  #   image: vexaai/telegram-bot:${IMAGE_TAG}
-  #   expose:
-  #     - "8200"
-  #   environment:
-  #     - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-  #     - CHAT_API_URL=http://agent-api:8100
-  #     - CHAT_DEFAULT_USER_ID=${CHAT_DEFAULT_USER_ID:-}
-  #     - CHAT_USER_MAP=${CHAT_USER_MAP:-{}}
-  #     - TELEGRAM_BOT_PORT=8200
-  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
-  #   depends_on:
-  #     - agent-api
-  #   networks:
-  #     - vexa
-  #   restart: unless-stopped
 
   mcp:
     build:
@@ -374,11 +325,6 @@ services:
     build:
       context: ../..
       dockerfile: services/dashboard/Dockerfile
-      # v0.10.5.3 Pack D-1 follow-up: thread version through to the
-      # prebuild generator. The chart yaml isn't in the dashboard build
-      # context (build context is repo root, but the script runs from
-      # /app inside the image), so we provide the version as a build-arg.
-      # VEXA_VERSION is read from the .env file by docker compose.
       args:
         NEXT_PUBLIC_VEXA_OSS_VERSION: ${VEXA_VERSION:-dev}
         NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE: ${VEXA_RELEASE_DATE:-}
@@ -415,9 +361,6 @@ services:
     mem_limit: 1g
     expose:
       - "8002"
-    # v0.10.6.1 (scope.yaml tts-auto-language-detection.code_to_change):
-    # host-expose the TTS port so host-side proves (TTS_AUTO_LANG_PICKS_RIGHT_VOICE,
-    # TTS_NEW_LANG_VOICE_AUTO_DOWNLOAD_CACHED) can curl localhost:8002.
     ports:
       - "127.0.0.1:8002:8002"
     environment:
@@ -432,35 +375,6 @@ services:
     networks:
       - vexa
     restart: unless-stopped
-
-  # calendar-service: NO-SHIP for 0.10 — not included in release
-  # calendar-service:
-  #   build:
-  #     context: ../..
-  #     dockerfile: services/calendar-service/Dockerfile
-  #   image: vexaai/calendar-service:${IMAGE_TAG}
-  #   ports:
-  #     - "${CALENDAR_SERVICE_PORT:-8050}:8050"
-  #   environment:
-  #     - DB_HOST=postgres
-  #     - DB_PORT=5432
-  #     - DB_NAME=${DB_NAME:-vexa}
-  #     - DB_USER=${DB_USER:-postgres}
-  #     - DB_PASSWORD=${DB_PASSWORD:-postgres}
-  #     - DB_SSL_MODE=disable
-  #     - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-  #     - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-  #     - MEETING_API_URL=http://meeting-api:8080
-  #     - BOT_API_TOKEN=${BOT_API_TOKEN:-}
-  #     - SYNC_INTERVAL_SECONDS=${CALENDAR_SYNC_INTERVAL:-300}
-  #     - DEFAULT_LEAD_TIME_MINUTES=${CALENDAR_LEAD_TIME:-2}
-  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
-  #   depends_on:
-  #     - postgres
-  #     - meeting-api
-  #   networks:
-  #     - vexa
-  #   restart: unless-stopped
 
 volumes:
   redis-data:
