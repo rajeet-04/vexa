@@ -82,6 +82,30 @@ services:
     networks:
       - vexa
 
+  # --- Transcription (local CPU Whisper — no data leaves your machine) ---
+
+  transcription-service:
+    build:
+      context: ../../services/transcription-service
+      dockerfile: Dockerfile.cpu
+    image: transcription-service-cpu:local
+    container_name: transcription-service
+    env_file:
+      - ../../services/transcription-service/.env
+    volumes:
+      - ../../services/transcription-service/models:/app/models
+    ports:
+      - "127.0.0.1:8083:8000"
+    networks:
+      - vexa
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   # --- Core services ---
 
   admin-api:
@@ -157,6 +181,7 @@ services:
     depends_on:
       - redis
       - postgres
+      - transcription-service
     networks:
       - vexa
     restart: unless-stopped
@@ -299,6 +324,7 @@ services:
       - redis
       - postgres
       - runtime-api
+      - transcription-service
     networks:
       - vexa
     restart: unless-stopped

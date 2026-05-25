@@ -99,6 +99,10 @@ env:
 
 # --- Preflight — validate credentials before starting anything ---
 preflight:
+	@if grep -qE '^LOCAL_TRANSCRIPTION=true' $(ENV_FILE) 2>/dev/null; then \
+		echo "  ✓ LOCAL_TRANSCRIPTION=true — skipping cloud token check"; \
+		exit 0; \
+	fi
 	@TX_URL=$$(grep -E '^TRANSCRIPTION_SERVICE_URL=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	TX_TOKEN=$$(grep -E '^TRANSCRIPTION_SERVICE_TOKEN=' $(ENV_FILE) 2>/dev/null | cut -d= -f2); \
 	if [ -z "$$TX_TOKEN" ] || [ "$$TX_TOKEN" = "your-token" ]; then \
@@ -202,12 +206,12 @@ up: check_docker preflight
 	fi; \
 	if grep -qE '^LOCAL_TRANSCRIPTION=true' $(ENV_FILE) 2>/dev/null; then \
 		echo "LOCAL_TRANSCRIPTION=true — starting transcription-service..."; \
-		cd $(ROOT)/services/transcription-service && docker compose up -d; \
+		cd $(ROOT)/services/transcription-service && docker compose -f docker-compose.cpu.yml up -d; \
 	fi
 
 down: check_docker
 	$(COMPOSE_CMD) down
-	@cd $(ROOT)/services/transcription-service && docker compose down 2>/dev/null || true
+	@cd $(ROOT)/services/transcription-service && docker compose -f docker-compose.cpu.yml down 2>/dev/null || true
 
 # --- Service API key (dashboard WS auth) ---
 # Creates a default user (if needed) and a bot+browser+tx API key, writes VEXA_API_KEY to .env.

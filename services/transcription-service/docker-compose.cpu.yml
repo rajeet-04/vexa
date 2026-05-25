@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
     networks:
       transcription-net:
-      vexa-network:
+      vexa_vexa:
         aliases:
           - transcription-service
           # Alias for vexa docker compose to connect to this dev transcription service
@@ -79,7 +79,7 @@ services:
 networks:
   transcription-net:
     driver: bridge
-  vexa-network:
+  vexa_vexa:
     external: true
-    name: vexa-network
+    name: vexa_vexa
 
