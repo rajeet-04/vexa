@@ -71,9 +71,9 @@ upstream transcription_workers {
 │  │ API Gateway  │  │ Meeting API  │  │ Runtime API      │  │
 │  │ (port 8056)  │  │ (port 8080)  │  │ (port 8090)      │  │
 │  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘  │
-│         │                 │                    │             │
-│         └─────────────────┼────────────────────┘             │
-│                           │                                  │
+│         │                 │                    │           │
+│         └─────────────────┼────────────────────┘           │
+│                           │                                │
 │                  ┌────────▼────────┐                        │
 │                  │ Transcription   │                        │
 │                  │   Service       │                        │
@@ -82,7 +82,7 @@ upstream transcription_workers {
 │                  │ • Nginx LB      │                        │
 │                  │ • Whisper API   │                        │
 │                  └────────┬────────┘                        │
-│                           │                                  │
+│                           │                                 │
 │                  ┌────────▼────────┐                        │
 │                  │   NVIDIA CUDA   │                        │
 │                  │   (RTX 5050)    │                        │
