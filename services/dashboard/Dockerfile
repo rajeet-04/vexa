@@ -35,6 +35,10 @@ ARG NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
 ENV NEXT_PUBLIC_VEXA_OSS_VERSION=$NEXT_PUBLIC_VEXA_OSS_VERSION
 ENV NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE=$NEXT_PUBLIC_VEXA_OSS_RELEASE_DATE
 
+# Required by next.config.ts at build time (rewrites use this URL)
+ARG VEXA_API_URL
+ENV VEXA_API_URL=$VEXA_API_URL
+
 # Build application (npm prebuild → generate-release-version.js → next build)
 RUN npm run build
 
