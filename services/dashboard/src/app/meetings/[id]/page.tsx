@@ -224,9 +224,14 @@ export default function MeetingDetailPage() {
   const audioMediaSignature = useMemo(() => {
     return recordings
       .filter(r => (r.status === "completed" || r.status === "in_progress"))
-      .filter(r => r.playback_url?.audio)
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
-      .map(r => `${r.id}:${r.playback_url?.audio ?? ""}`)
+      .map(r => {
+        const mediaSignature = (r.media_files || [])
+          .filter(m => m.type === "audio")
+          .map(m => `${m.id}:${m.created_at}`)
+          .join(",");
+        return `${r.id}:${r.playback_url?.audio ?? ""}:${mediaSignature}`;
+      })
       .join("|");
   }, [recordings]);
 
@@ -238,7 +243,10 @@ export default function MeetingDetailPage() {
     let cancelled = false;
     (async () => {
       const availableRecordings = recordings
-        .filter(r => (r.status === "completed" || r.status === "in_progress") && r.playback_url?.audio)
+        .filter(r => {
+          if (r.status !== "completed" && r.status !== "in_progress") return false;
+          return Boolean(r.playback_url?.audio) || (r.media_files || []).some(m => m.type === "audio");
+        })
         .sort((a, b) => a.created_at.localeCompare(b.created_at));
       try {
         const results = await Promise.all(availableRecordings.map(async rec => {
@@ -280,7 +288,8 @@ export default function MeetingDetailPage() {
       try {
         for (const rec of recordings) {
           if (rec.status !== "completed" && rec.status !== "in_progress") continue;
-          if (!rec.playback_url?.video) continue;
+          const hasVideo = Boolean(rec.playback_url?.video) || (rec.media_files || []).some(m => m.type === "video");
+          if (!hasVideo) continue;
           const result = await vexaAPI.getRecordingMasterStreamUrl(rec.id, "video");
           if (!result) {
             // 404 — video master not ready for this recording yet; try the next.

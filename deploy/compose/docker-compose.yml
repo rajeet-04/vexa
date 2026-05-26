@@ -81,9 +81,10 @@ services:
     container_name: transcription-worker-1
     environment:
       - WORKER_ID=1
-      - MODEL_SIZE=${MODEL_SIZE:-large-v3-turbo}
+      - MODEL_SIZE=${MODEL_SIZE:-mobiuslabsgmbh/faster-whisper-large-v3-turbo}
       - DEVICE=cuda
       - COMPUTE_TYPE=${COMPUTE_TYPE:-int8}
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
       - VAD_MIN_SILENCE_DURATION_MS=80
       - API_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-vexa-local-gpu-token}
       - FAIL_FAST_WHEN_BUSY=true
@@ -176,7 +177,7 @@ services:
       - AGENT_IMAGE=${AGENT_IMAGE}
       - BROWSER_IMAGE=${BROWSER_IMAGE}
       - REDIS_URL=redis://redis:6379
-      - TRANSCRIPTION_SERVICE_URL=http://transcription-lb:80/v1/audio/transcriptions
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-http://transcription-lb:80/v1/audio/transcriptions}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-vexa-local-gpu-token}
       - TTS_SERVICE_URL=http://tts-service:8002
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-vexa-internal-secret}
@@ -204,7 +205,6 @@ services:
     depends_on:
       - redis
       - postgres
-      - transcription-lb
     networks:
       - vexa
     restart: unless-stopped
@@ -284,7 +284,7 @@ services:
       - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
       - RECORDING_ENABLED=${RECORDING_ENABLED:-true}
       - CAPTURE_MODES=${CAPTURE_MODES:-audio}
-      - TRANSCRIPTION_SERVICE_URL=http://transcription-lb:80/v1/audio/transcriptions
+      - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-http://transcription-lb:80/v1/audio/transcriptions}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-vexa-local-gpu-token}
       - TRANSCRIPTION_GATEWAY_URL=${TRANSCRIPTION_GATEWAY_URL:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -296,7 +296,6 @@ services:
       - redis
       - postgres
       - runtime-api
-      - transcription-lb
     networks:
       - vexa
     restart: unless-stopped
